@@ -23,7 +23,11 @@ async function main() {
       inputSchema: z.object({
         location: z.string(),
       }),
-      outputSchema: z.object({ location: z.string(), temperature: z.number(), condition: z.string() }),
+      outputSchema: z.object({
+        location: z.string(),
+        temperature: z.number(),
+        condition: z.string()
+      }),
       execute: async ({ location }) => ({
         location,
         temperature: 65,

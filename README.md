@@ -33,7 +33,7 @@ const tools = {
       location: z.string(),
     }),
     outputSchema: z.object({ 
-      temperature: z.integer(),
+      temperature: z.number(),
       condition: z.string(),
     }),
     execute: async ({ location }) => {
