@@ -2,7 +2,7 @@
 
 Plug-n-play "code mode" tool call scripting for Vercel AI SDK
 
-[![npm version](https://badge.fury.io/js/code-mode.svg)](https://badge.fury.io/js/tool-script)
+[![npm version](https://badge.fury.io/js/code-mode.svg)](https://badge.fury.io/js/tool-scripting)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 **Inspired by [Cloudflare's Code Mode](https://blog.cloudflare.com/code-mode/)** - LLMs are better at writing JavaScript than using synthetic tool calling syntax.
@@ -24,7 +24,7 @@ const tools = {
   getUserLocation: tool({
     description: 'Get user current location',
     inputSchema: z.object({}),
-    outputSchema: z.string(),  // optionally provide outputSchema to help the LLM compose tool calls
+    outputSchema: z.string(), // optional outputSchema to help the LLM compose tool calls
     execute: async () => 'San Francisco, CA',
   }),
   getWeather: tool({
@@ -75,6 +75,9 @@ const result = await toolScripting(generateText)({
 Here's what a traditional series of tool calls looks like (without Tool Scripting):
 
 ```
+role: user
+text: Check the weather near me
+--
 role: assistant
 type: tool-call
 toolName: getUserLocation
@@ -102,6 +105,9 @@ text: The weather in San Francisco, CA today is foggy with a temperature of 65°
 Now, here's the same process with Tool Scripting:
 
 ```
+role: user
+text: Check the weather near me
+--
 role: assistant
 type: tool-call
 toolName: runToolScript
@@ -120,7 +126,7 @@ role: assistant
 text: The weather in San Francisco, CA today is foggy with a temperature of 65°F.
 ```
 
-💥 In a single LLM step, we called two tools to get the user's location and then the weather for that location.
+💥 In a single LLM step, we composed two tools to get the user's location and then the weather for that location.
 
 ## Requirements
 
