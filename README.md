@@ -1,4 +1,4 @@
-# tool-script
+# tool-scripting
 
 Plug-n-play "code mode" tool call scripting for Vercel AI SDK
 
@@ -10,21 +10,21 @@ Plug-n-play "code mode" tool call scripting for Vercel AI SDK
 ## Installation
 
 ```bash
-npm install ai tool-script
+npm install ai tool-scripting
 ```
 
 ## Usage
 
 ```javascript
 import { z } from 'zod';
-import { streamText, tool } from 'ai';
-import { toolScript } from 'tool-script';
+import { generateText, tool, stepCountIs } from 'ai';
+import { toolScript } from 'tool-scripting';
 
 const tools = {
   getUserLocation: tool({
     description: 'Get user current location',
     inputSchema: z.object({}),
-    // outputSchema: z.string(),
+    outputSchema: z.string(),  // optionally provide outputSchema to help the LLM compose tool calls
     execute: async () => 'San Francisco, CA',
   }),
   getWeather: tool({
@@ -32,8 +32,7 @@ const tools = {
     inputSchema: z.object({
       location: z.string(),
     }),
-    outputSchema: z.object({ // optionally provide outputSchema to help the LLM compose tool calls
-      location: z.string(),
+    outputSchema: z.object({ 
       temperature: z.integer(),
       condition: z.string(),
     }),
@@ -43,45 +42,85 @@ const tools = {
   }),
 };
 
-const streamTextWithToolScript = toolScript(streamText)
-
-// Just wrap your existing streamText call
-const result = await streamTextWithToolScript({
+// Just wrap your existing generateText (or streamText)
+const result = await toolScripting(generateText)({
   model: 'openai/gpt-5',
   tools,
   messages: [
     { role: 'assistant', content: 'How can I help?' },
-    { role: 'user', content: 'How is the weather?' },
+    { role: 'user', content: 'Check the weather near me' },
   ],
+  stopWhen: stepCountIs(5),
 });
 ```
 
 ## How it works
 
-1. **Extracts** your tool `execute` functions automatically
+1. **Converts** your tool definitions to a tool call SDK
 2. **LLM Generates** JavaScript code instead of tool calls
-3. **Executes** code in secure sandbox with tool bindings
+3. **Executes** code in secure sandbox (v8 isolate) with tool bindings
 4. **Returns** whatever the generated code returns
 
 ## Why Code Mode?
 
-**Tool Scripts > Tool Calls**
+**Tool Scripting > Tool Calls**
 
 - 🧠 **Better** - LLMs excel at JavaScript vs synthetic tool syntax
 - 🔧 **Composable** - Logic and conditionals between tool calls
 - 🔒 **Secure** - Sandboxed execution with controlled bindings
 - 🎯 **Simple** - Just wrap your existing Vercel AI SDK calls
 
-## Generated Code Example
+## Example
 
-```chromesidekick
-// LLM should output ONLY this fenced block when using code mode
-const location = await getUserLocation();
-const weather = await getWeather({ location });
-return weather;
+Here's what a traditional series of tool calls looks like (without Tool Scripting):
+
+```
+role: assistant
+type: tool-call
+toolName: getUserLocation
+--
+role: tool
+type: tool-result
+output: San Francisco, CA
+--
+role: assistant
+type: tool-call
+toolName: getWeather
+input:
+  location: San Francisco, CA
+--
+role: tool
+type: tool-result
+output:
+  temperature: 65
+  condition: foggy
+--
+role: assistant
+text: The weather in San Francisco, CA today is foggy with a temperature of 65°F.
 ```
 
-If a model cannot adhere to `chromesidekick` fencing, `code-mode` falls back to detecting ```javascript or ```js fenced blocks.
+Now, here's the same process with Tool Scripting:
+
+```
+role: assistant
+type: tool-call
+toolName: runToolScript
+input:
+  script: const location = await getUserLocation();\nconst weather = await getWeather({ location });\nreturn { location, weather };
+--
+role: tool
+type: tool-result
+output:
+  location: San Francisco, CA
+  weather:
+    temperature: 65
+    condition: foggy
+--
+role: assistant
+text: The weather in San Francisco, CA today is foggy with a temperature of 65°F.
+```
+
+💥 In a single LLM step, we called two tools to get the user's location and then the weather for that location.
 
 ## Requirements
 
