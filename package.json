@@ -39,10 +39,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/will123195/tool-script.git"
+    "url": "git+https://github.com/will123195/tool-scripting.git"
   },
-  "homepage": "https://github.com/will123195/tool-script#readme",
+  "homepage": "https://github.com/will123195/tool-scripting#readme",
   "bugs": {
-    "url": "https://github.com/will123195/tool-script/issues"
+    "url": "https://github.com/will123195/tool-scripting/issues"
   }
 }
