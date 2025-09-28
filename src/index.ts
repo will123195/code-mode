@@ -1,4 +1,5 @@
 import ivm from 'isolated-vm';
+import { z } from 'zod';
 
 export interface CodeModeOptions {
   timeout?: number;
@@ -14,6 +15,8 @@ export interface CodeModeOptions {
 export interface ToolDefinition {
   description: string;
   inputSchema: any;
+  parameters?: any;
+  outputSchema?: any;
   execute: (...args: any[]) => Promise<any> | any;
 }
 
@@ -140,97 +143,187 @@ function extractToolBindings(tools: Tools): Record<string, Function> {
 }
 
 function generateCodeSystemPrompt(tools: Tools): string {
+  function zodTypeToString(schema: any): string {
+    if (!schema) return 'unknown';
+    // Zod object
+    if (schema instanceof z.ZodObject) {
+      const shape = schema.shape;
+      const entries = Object.entries(shape).map(([k, v]) => `${k}: ${zodTypeToString(v)}`);
+      return `{ ${entries.join(', ')} }`;
+    }
+    if (schema instanceof z.ZodString) return 'string';
+    if (schema instanceof z.ZodNumber) return 'number';
+    if (schema instanceof z.ZodBoolean) return 'boolean';
+    if (schema instanceof z.ZodArray) return `${zodTypeToString(schema.element)}[]`;
+    if (schema instanceof z.ZodOptional) return `${zodTypeToString(schema.unwrap())} | undefined`;
+    if (schema instanceof z.ZodUnion) return schema._def.options.map(zodTypeToString).join(' | ');
+    if (schema instanceof z.ZodLiteral) return JSON.stringify(schema._def.value);
+    if (schema instanceof z.ZodEnum) return schema._def.values.map((v: string) => JSON.stringify(v)).join(' | ');
+    return 'unknown';
+  }
+
+  function jsonSchemaToString(js: any): string {
+    if (!js) return 'unknown';
+    if (js.type === 'object' && js.properties) {
+      const entries = Object.entries(js.properties).map(([k, v]: [string, any]) => `${k}: ${jsonSchemaToString(v)}`);
+      return `{ ${entries.join(', ')} }`;
+    }
+    if (js.type === 'array') {
+      const t = jsonSchemaToString(js.items);
+      return `${t}[]`;
+    }
+    if (Array.isArray(js.enum)) {
+      return js.enum.map((v: any) => JSON.stringify(v)).join(' | ');
+    }
+    if (typeof js === 'string') return js;
+    return js.type || 'unknown';
+  }
+
+  function getParamEntries(tool: ToolDefinition): { name: string; type: string; optional?: boolean }[] {
+    const schema = tool.parameters || tool.inputSchema;
+    if (!schema) return [];
+    try {
+      // Zod object
+      if (schema instanceof z.ZodObject) {
+        const shape = schema.shape;
+        return Object.entries(shape).map(([key, val]: [string, any]) => {
+          let optional = false;
+          let inner = val;
+          if (val instanceof z.ZodOptional) {
+            optional = true;
+            inner = val.unwrap();
+          }
+          return { name: key, type: zodTypeToString(inner), optional };
+        });
+      }
+      // JSON schema object
+      if (schema && schema.type === 'object' && schema.properties) {
+        const required: string[] = Array.isArray(schema.required) ? schema.required : [];
+        return Object.entries(schema.properties).map(([key, prop]: [string, any]) => {
+          const type = jsonSchemaToString(prop);
+          const optional = !required.includes(key);
+          return { name: key, type, optional };
+        });
+      }
+      return [];
+    } catch {
+      return [];
+    }
+  }
+
+  function getReturnSignature(tool: ToolDefinition): string {
+    const schema = tool.outputSchema;
+    if (!schema) return '';
+    try {
+      const formatType = (s: string) => {
+        let out = s;
+        const tokens = ['string', 'number', 'boolean', 'null', 'undefined'];
+        for (const t of tokens) {
+          const re = new RegExp(`\\b${t}\\b`, 'g');
+          out = out.replace(re, `<${t}>`);
+        }
+        return out;
+      };
+      if (schema && typeof schema === 'object' && '_def' in schema) {
+        const typeStr = zodTypeToString(schema);
+        return `: ${formatType(typeStr)}`;
+      }
+      const typeStr = jsonSchemaToString(schema);
+      return typeStr ? `: ${formatType(typeStr)}` : '';
+    } catch {
+      return '';
+    }
+  }
+
   const toolDescriptions = Object.entries(tools)
-    .map(([name, tool]) => `- ${name}(): ${tool.description}`)
+    .map(([name, tool]) => {
+      const params = getParamEntries(tool);
+      const returns = getReturnSignature(tool);
+      const lines: string[] = [];
+      lines.push(`\n## ${name} -- ${tool.description}`);
+      if (params.length > 0) {
+        lines.push(`  - params:`);
+        for (const p of params) {
+          const t = (p.type || '').trim();
+          const typeDisplay = t.startsWith('{') ? t : `<${t}>`;
+          lines.push(`    - ${p.name} ${typeDisplay}${p.optional ? ' (optional)' : ''}`);
+        }
+      }
+      if (returns) {
+        lines.push(`  - returns${returns}`);
+      }
+      return lines.join('\n');
+    })
     .join('\n');
 
-  return `
-You can accomplish tasks by writing JavaScript code using the available functions.
+  const prompt = `
+<Tool Calling SDK>
+You can take action by writing JavaScript using the following SDK.
 
-Available functions:
+# SDK
 ${toolDescriptions}
 
-When you want to use code mode, write JavaScript code in a code block:
-\`\`\`javascript
-// Your code here
-const result = await someFunction();
-return result;
-\`\`\`
+# Example
 
-Use code mode for:
-- Multiple function calls
-- Data processing between calls
-- Conditional logic
-- Complex workflows
-`.trim();
+\`\`\`yaml
+toolName: runToolScript
+args:
+  script: const location = await getUserLocation();\\nconst weather = await getWeather({ location });\\nreturn { location, weather };
+\`\`\`
+</Tool Calling SDK>
+`;
+
+  return prompt;
 }
 
 function extractCodeFromResponse(text: string): string | null {
-  const codeMatch = text.match(/```(?:javascript|js)\n([\s\S]*?)\n```/);
-  return codeMatch ? codeMatch[1].trim() : null;
+  // Prefer non-codeblock markers to avoid confusion with prose code
+  const markerMatch = text.match(/BEGIN_TOOLSCRIPT\n([\s\S]*?)\nEND_TOOLSCRIPT/i);
+  if (markerMatch) return markerMatch[1].trim();
+  // Fallbacks for backward compatibility
+  const toolscriptFence = text.match(/```toolscript\n([\s\S]*?)\n```/i);
+  if (toolscriptFence) return toolscriptFence[1].trim();
+  const jsFence = text.match(/```(?:javascript|js)\n([\s\S]*?)\n```/i);
+  return jsFence ? jsFence[1].trim() : null;
 }
 
-export function codeMode(aiFunction: Function, options: CodeModeOptions = {}) {
+export function toolScript(aiFunction: Function, options: CodeModeOptions = {}) {
   return async function(config: any) {
     const { tools, system = '', ...restConfig } = config;
-    
-    if (!tools) {
-      throw new Error('Tools are required for code mode');
-    }
+    const toolsObj: Tools = tools || {} as Tools;
 
     // Extract tool bindings
-    const bindings = extractToolBindings(tools);
+    const bindings = extractToolBindings(toolsObj);
     
     // Create execution sandbox
     const sandbox = new CodeExecutionSandbox(options);
     
-    // Enhanced system prompt
-    const codeSystemPrompt = generateCodeSystemPrompt(tools);
-    const enhancedSystem = system ? `${system}\n\n${codeSystemPrompt}` : codeSystemPrompt;
+    // Enhanced system prompt (omit Tool Calling SDK if there are no tools)
+    const hasTools = Object.keys(toolsObj).length > 0;
+    const codeSystemPrompt = hasTools ? generateCodeSystemPrompt(toolsObj) : '';
+    const enhancedSystem = hasTools
+      ? (system ? `${system}\n\n${codeSystemPrompt}` : codeSystemPrompt)
+      : system;
+
+    if (enhancedSystem) console.log(enhancedSystem);
     
-    // Call original AI function with enhanced system prompt
-    const result = await aiFunction({
-      ...restConfig,
-      tools, // Keep original tools for fallback
-      system: enhancedSystem,
-    });
-
-    // If it's a streaming result, we need to handle it differently
-    if (result.textStream || result.fullStream) {
-      return result; // Return as-is for now, streaming support can be added later
-    }
-
-    // For non-streaming results, check for code execution
-    if (result.text) {
-      const code = extractCodeFromResponse(result.text);
-      
-      if (code) {
-        try {
-          options.onCodeGenerated?.(code);
-          
-          const executionResult = await sandbox.execute(code, bindings);
-          
-          options.onCodeExecuted?.(executionResult);
-          
-          return {
-            ...result,
-            codeExecuted: true,
-            executionResult,
-            generatedCode: code,
-          };
-        } catch (error) {
-          options.onError?.(error as Error);
-          
-          return {
-            ...result,
-            codeExecuted: false,
-            executionError: (error as Error).message,
-            generatedCode: code,
-          };
+    // Provide exactly one tool to the SDK: runToolScript
+    const singleTool = {
+      runToolScript: {
+        description: 'Execute the provided tool script with available functions',
+        inputSchema: z.object({ script: z.string() }),
+        execute: async ({ script }: { script: string }) => {
+          return await sandbox.execute(script, bindings);
         }
       }
-    }
+    } as Tools;
 
-    return result;
+    // Call original AI function with enhanced system prompt and single tool
+    return aiFunction({
+      ...restConfig,
+      tools: singleTool,
+      toolChoice: 'auto',
+      system: enhancedSystem,
+    });
   };
 }

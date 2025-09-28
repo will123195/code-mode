@@ -1,7 +1,7 @@
 {
-  "name": "code-mode",
+  "name": "tool-script",
   "version": "0.1.0",
-  "description": "Transform Vercel AI SDK tools into JavaScript code execution",
+  "description": "Code mode tool call scripting for Vercel AI SDK",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
@@ -10,25 +10,28 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "test": "node test/basic.js"
+    "test": "node test/basic.js",
+    "test:int": "node test/integration.js"
   },
   "keywords": [
     "ai",
     "llm",
     "tools",
-    "code-execution",
+    "code-mode",
     "vercel-ai-sdk"
   ],
-  "author": "Chrome Sidekick",
+  "author": "will123195",
   "license": "MIT",
   "dependencies": {
     "isolated-vm": "^5.0.1"
   },
   "peerDependencies": {
-    "ai": "^3.0.0"
+    "ai": "^5.0.56"
   },
   "devDependencies": {
+    "@ai-sdk/openai": "^2.0.38",
     "@types/node": "^18.0.0",
+    "dotenv": "^17.2.2",
     "typescript": "^5.0.0"
   },
   "engines": {
@@ -36,10 +39,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/chromesidekick/code-mode.git"
+    "url": "https://github.com/will123195/tool-script.git"
   },
-  "homepage": "https://github.com/chromesidekick/code-mode#readme",
+  "homepage": "https://github.com/will123195/tool-script#readme",
   "bugs": {
-    "url": "https://github.com/chromesidekick/code-mode/issues"
+    "url": "https://github.com/will123195/tool-script/issues"
   }
 }

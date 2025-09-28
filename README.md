@@ -1,8 +1,8 @@
-# code-mode
+# tool-script
 
-> **Transform Vercel AI SDK tools into JavaScript code execution**
+Plug-n-play "code mode" tool call scripting for Vercel AI SDK
 
-[![npm version](https://badge.fury.io/js/code-mode.svg)](https://badge.fury.io/js/code-mode)
+[![npm version](https://badge.fury.io/js/code-mode.svg)](https://badge.fury.io/js/tool-script)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 **Inspired by [Cloudflare's Code Mode](https://blog.cloudflare.com/code-mode/)** - LLMs are better at writing JavaScript than using synthetic tool calling syntax.
@@ -10,7 +10,7 @@
 ## Installation
 
 ```bash
-npm install ai code-mode
+npm install ai tool-script
 ```
 
 ## Usage
@@ -18,12 +18,13 @@ npm install ai code-mode
 ```javascript
 import { z } from 'zod';
 import { streamText, tool } from 'ai';
-import { codeMode } from 'code-mode';
+import { toolScript } from 'tool-script';
 
 const tools = {
   getUserLocation: tool({
     description: 'Get user current location',
     inputSchema: z.object({}),
+    // outputSchema: z.string(),
     execute: async () => 'San Francisco, CA',
   }),
   getWeather: tool({
@@ -31,14 +32,21 @@ const tools = {
     inputSchema: z.object({
       location: z.string(),
     }),
+    outputSchema: z.object({ // optionally provide outputSchema to help the LLM compose tool calls
+      location: z.string(),
+      temperature: z.integer(),
+      condition: z.string(),
+    }),
     execute: async ({ location }) => {
       return { location, temperature: 65, condition: 'foggy' };
     },
   }),
 };
 
+const streamTextWithToolScript = toolScript(streamText)
+
 // Just wrap your existing streamText call
-const result = await codeMode(streamText)({
+const result = await streamTextWithToolScript({
   model: 'openai/gpt-5',
   tools,
   messages: [
@@ -66,12 +74,14 @@ const result = await codeMode(streamText)({
 
 ## Generated Code Example
 
-```javascript
-// LLM generates code like this:
+```chromesidekick
+// LLM should output ONLY this fenced block when using code mode
 const location = await getUserLocation();
 const weather = await getWeather({ location });
 return weather;
 ```
+
+If a model cannot adhere to `chromesidekick` fencing, `code-mode` falls back to detecting ```javascript or ```js fenced blocks.
 
 ## Requirements
 

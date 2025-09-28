@@ -1,60 +1,60 @@
-const { codeMode } = require('../dist/index.js');
+const { toolScript } = require('../dist/index.js');
+const { streamText, generateText, tool } = require('ai');
+const { z } = require('zod');
+const { createMockModel } = require('./mockModel');
 
-// Mock AI function for testing
-async function mockGenerateText(config) {
-  console.log('Mock AI called with:', {
-    system: config.system.slice(0, 100) + '...',
-    tools: Object.keys(config.tools || {}),
-  });
-  
-  // Simulate LLM generating code
-  return {
-    text: `I'll get your location and check the weather.
-
-\`\`\`javascript
-const location = await getUserLocation();
-const weather = await getWeather({ location });
-return { location, weather };
-\`\`\``,
-  };
-}
-
-// Mock tools
+// Tools defined like in README using ai.tool() and zod
 const tools = {
-  getUserLocation: {
+  getUserLocation: tool({
     description: 'Get user current location',
-    inputSchema: {},
+    inputSchema: z.object({}),
+    outputSchema: z.string(),
     execute: async () => 'San Francisco, CA',
-  },
-  getWeather: {
+  }),
+  getWeather: tool({
     description: 'Get weather for a location',
-    inputSchema: {},
+    inputSchema: z.object({
+      location: z.string(),
+    }),
+    outputSchema: z.object({ location: z.string(), temperature: z.number(), condition: z.string() }),
     execute: async ({ location }) => ({
       location,
       temperature: 65,
       condition: 'foggy',
     }),
-  },
+  }),
 };
 
 async function test() {
-  console.log('🧪 Testing code-mode...\n');
+  console.log('🧪 Testing tool-script...\n');
   
   try {
-    const wrappedFunction = codeMode(mockGenerateText, {
-      onCodeGenerated: (code) => console.log('📝 Generated code:\n', code),
-      onCodeExecuted: (result) => console.log('✅ Execution result:', result),
-      onError: (error) => console.log('❌ Execution error:', error.message),
-    });
-    
-    const result = await wrappedFunction({
+    const model = createMockModel([
+      { toolScript: `const location = await getUserLocation();\nconst weather = await getWeather({ location });\nreturn { location, weather };` },
+      { text: 'Done.' },
+    ]);
+    const result = await toolScript(generateText)({
+      model,
       tools,
+      system: 'You are a helpful assistant.',
       messages: [
-        { role: 'user', content: 'How is the weather?' }
+        { role: 'user', content: 'What is the weather near me?' }
       ],
+      maxSteps: 5,
+      onFinish: ({ text, toolCalls, responseMessages }) => {
+        console.log('🧾 onFinish text:', text);
+      }
     });
     
-    console.log('\n🎉 Final result:', JSON.stringify(result, null, 2));
+    // If streaming, accumulate text for visibility
+    if (result && result.textStream && result.textStream[Symbol.asyncIterator]) {
+      let accumulated = '';
+      for await (const delta of result.textStream) {
+        accumulated += typeof delta === 'string' ? delta : (delta.textDelta || '');
+      }
+      console.log('\n🧵 Streamed text:', accumulated);
+    }
+    console.log('\n🎉 Final result:', result.text);
     
   } catch (error) {
     console.error('❌ Test failed:', error.message);
