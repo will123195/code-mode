@@ -276,18 +276,7 @@ args:
   return prompt;
 }
 
-function extractCodeFromResponse(text: string): string | null {
-  // Prefer non-codeblock markers to avoid confusion with prose code
-  const markerMatch = text.match(/BEGIN_TOOLSCRIPT\n([\s\S]*?)\nEND_TOOLSCRIPT/i);
-  if (markerMatch) return markerMatch[1].trim();
-  // Fallbacks for backward compatibility
-  const toolscriptFence = text.match(/```toolscript\n([\s\S]*?)\n```/i);
-  if (toolscriptFence) return toolscriptFence[1].trim();
-  const jsFence = text.match(/```(?:javascript|js)\n([\s\S]*?)\n```/i);
-  return jsFence ? jsFence[1].trim() : null;
-}
-
-export function toolScript(aiFunction: Function, options: CodeModeOptions = {}) {
+export function toolScripting(aiFunction: Function, options: CodeModeOptions = {}) {
   return async function(config: any) {
     const { tools, system = '', ...restConfig } = config;
     const toolsObj: Tools = tools || {} as Tools;

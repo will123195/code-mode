@@ -1,4 +1,4 @@
-const { toolScript } = require('../dist/index.js');
+const { toolScripting } = require('../dist/index.js');
 const { streamText, generateText, tool } = require('ai');
 const { z } = require('zod');
 const { createMockModel } = require('./mockModel');
@@ -33,7 +33,7 @@ async function test() {
       { toolScript: `const location = await getUserLocation();\nconst weather = await getWeather({ location });\nreturn { location, weather };` },
       { text: 'Done.' },
     ]);
-    const result = await toolScript(generateText)({
+    const result = await toolScripting(generateText)({
       model,
       tools,
       system: 'You are a helpful assistant.',

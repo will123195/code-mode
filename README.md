@@ -18,7 +18,8 @@ npm install ai tool-scripting
 ```javascript
 import { z } from 'zod';
 import { generateText, tool, stepCountIs } from 'ai';
-import { toolScript } from 'tool-scripting';
+import { openai } = from '@ai-sdk/openai';
+import { toolScripting } from 'tool-scripting';
 
 const tools = {
   getUserLocation: tool({
@@ -32,7 +33,7 @@ const tools = {
     inputSchema: z.object({
       location: z.string(),
     }),
-    outputSchema: z.object({ 
+    outputSchema: z.object({ // optional outputSchema to help the LLM compose tool calls
       temperature: z.number(),
       condition: z.string(),
     }),
@@ -43,8 +44,11 @@ const tools = {
 };
 
 // Just wrap your existing generateText (or streamText)
-const result = await toolScripting(generateText)({
-  model: 'openai/gpt-5',
+const betterGenerateText = toolScripting(generateText)
+
+// Same familiar AI SDK usage
+const result = await betterGenerateText({
+  model: openai('gpt-5'),
   tools,
   messages: [
     { role: 'assistant', content: 'How can I help?' },

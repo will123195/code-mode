@@ -1,6 +1,6 @@
 require('dotenv').config();
 
-const { toolScript } = require('../dist/index.js');
+const { toolScripting } = require('../dist/index.js');
 const { generateText, tool, stepCountIs } = require('ai');
 const { openai } = require('@ai-sdk/openai');
 const { z } = require('zod');
@@ -38,19 +38,15 @@ async function main() {
 
   console.log('🔌 Running integration test...');
 
-
-  const options = {
-    model: openai('gpt-4o', { apiKey: process.env.OPENAI_API_KEY }),
+  const result = await toolScripting(generateText)({
+    model: openai('gpt-5', { apiKey: process.env.OPENAI_API_KEY }),
     tools,
     system: 'You are a helpful assistant.',
     messages: [
       { role: 'user', content: 'What is the weather like today?' },
     ],
     stopWhen: stepCountIs(5)
-  };
-
-  const result = await toolScript(generateText)(options);
-  // const result = await generateText(options);
+  });
 
   console.log('Response:', JSON.stringify(result.response, null, 2));
 }
@@ -61,5 +57,3 @@ if (require.main === module) {
     process.exit(1);
   });
 }
-
-
