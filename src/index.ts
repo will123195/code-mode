@@ -41,6 +41,10 @@ class CodeExecutionSandbox {
     return new Promise(async (resolve, reject) => {
       const isolate = new ivm.Isolate({ memoryLimit: memoryLimitMb });
       let finished = false;
+      
+      // Execution log to capture function calls
+      const executionLog: Array<{ fn: string; args: any; result: any }> = [];
+      
       const cleanup = () => {
         try { isolate.dispose(); } catch {}
       };
@@ -94,11 +98,21 @@ class CodeExecutionSandbox {
           ],
         );
 
-        // Bridge tool bindings into isolate
+        // Bridge tool bindings into isolate with logging
         for (const [name, fn] of Object.entries(bindings)) {
           await context.evalClosure(
             `global[${JSON.stringify(name)}] = (...args) => $0.apply(undefined, args, { arguments: { copy: true }, result: { promise: true, copy: true } });`,
-            [ new ivm.Reference(fn) ],
+            [ new ivm.Reference(async (...args: any[]) => {
+              try {
+                const result = await fn(...args);
+                executionLog.push({ fn: name, args, result });
+                return result;
+              } catch (error: any) {
+                const errorMsg = error?.message || String(error);
+                executionLog.push({ fn: name, args, result: `Error: ${errorMsg}` });
+                throw error;
+              }
+            }) ],
           );
         }
 
@@ -114,8 +128,26 @@ class CodeExecutionSandbox {
               }
             })();`,
           [
-            new ivm.Reference((res: any) => { if (!finished) { finished = true; clearTimeout(wallTimer); cleanup(); resolve(res); } }),
-            new ivm.Reference((msg: string) => { if (!finished) { finished = true; clearTimeout(wallTimer); cleanup(); reject(new Error(msg)); } }),
+            new ivm.Reference((res: any) => { 
+              if (!finished) { 
+                finished = true; 
+                clearTimeout(wallTimer); 
+                cleanup(); 
+                // Format execution log and final result
+                const formattedResult = this.formatExecutionResult(executionLog, res);
+                resolve(formattedResult); 
+              } 
+            }),
+            new ivm.Reference((msg: string) => { 
+              if (!finished) { 
+                finished = true; 
+                clearTimeout(wallTimer); 
+                cleanup(); 
+                // Include execution log even on error
+                const formattedError = this.formatExecutionResult(executionLog, null, msg);
+                reject(new Error(formattedError)); 
+              } 
+            }),
           ],
           { timeout: this.timeout },
         );
@@ -130,6 +162,38 @@ class CodeExecutionSandbox {
       }
     });
   }
+
+  /**
+   * Format execution log and final result in an LLM-friendly format
+   */
+  private formatExecutionResult(log: Array<{ fn: string; args: any; result: any }>, finalResult: any, error?: string): string {
+    const lines: string[] = [];
+    
+    // Add execution log
+    if (log.length > 0) {
+      lines.push('Execution trace:');
+      for (const entry of log) {
+        const argsStr = JSON.stringify(entry.args);
+        const resultStr = typeof entry.result === 'string' 
+          ? entry.result 
+          : JSON.stringify(entry.result);
+        lines.push(`  ${entry.fn}(${argsStr}) → ${resultStr}`);
+      }
+      lines.push('');
+    }
+    
+    // Add final result or error
+    if (error) {
+      lines.push(`Script error: ${error}`);
+    } else if (finalResult !== undefined && finalResult !== null) {
+      const resultStr = typeof finalResult === 'string'
+        ? finalResult
+        : JSON.stringify(finalResult);
+      lines.push(`Final result: ${resultStr}`);
+    }
+    
+    return lines.join('\n');
+  }
 }
 
 function extractToolBindings(tools: Tools): Record<string, Function> {
@@ -143,70 +207,129 @@ function extractToolBindings(tools: Tools): Record<string, Function> {
 }
 
 function generateCodeSystemPrompt(tools: Tools): string {
-  function zodTypeToString(schema: any): string {
+  // Convert JSON Schema (or Zod schema) to a readable type string
+  function jsonSchemaToTypeString(schema: any): string {
     if (!schema) return 'unknown';
-    // Zod object
-    if (schema instanceof z.ZodObject) {
-      const shape = schema.shape;
-      const entries = Object.entries(shape).map(([k, v]) => `${k}: ${zodTypeToString(v)}`);
+    
+    // Handle Zod v4 toJSONSchema format (has 'def' and 'type' but not standard JSON Schema)
+    if (schema.def && schema.type) {
+      // Handle Zod optional wrapper - unwrap to innerType
+      if (schema.type === 'optional') {
+        const innerType = schema.def.innerType || schema.innerType;
+        return jsonSchemaToTypeString(innerType);
+      }
+      
+      // Handle Zod nullable wrapper - unwrap to innerType
+      if (schema.type === 'nullable') {
+        const innerType = schema.def.innerType || schema.innerType;
+        return jsonSchemaToTypeString(innerType);
+      }
+      
+      // Handle Zod array
+      if (schema.type === 'array' && (schema.element || schema.def.element)) {
+        const element = schema.element || schema.def.element;
+        return `${jsonSchemaToTypeString(element)}[]`;
+      }
+      
+      // Handle Zod object
+      if (schema.type === 'object' && schema.def.shape) {
+        const entries = Object.entries(schema.def.shape).map(([k, v]: [string, any]) => 
+          `${k}: ${jsonSchemaToTypeString(v)}`
+        );
+        return `{ ${entries.join(', ')} }`;
+      }
+      
+      // Handle primitive types
+      if (schema.type === 'string') return 'string';
+      if (schema.type === 'number') return 'number';
+      if (schema.type === 'boolean') return 'boolean';
+    }
+    
+    // Standard JSON Schema format
+    if (schema.type === 'object' && schema.properties) {
+      const entries = Object.entries(schema.properties).map(([k, v]: [string, any]) => 
+        `${k}: ${jsonSchemaToTypeString(v)}`
+      );
       return `{ ${entries.join(', ')} }`;
     }
-    if (schema instanceof z.ZodString) return 'string';
-    if (schema instanceof z.ZodNumber) return 'number';
-    if (schema instanceof z.ZodBoolean) return 'boolean';
-    if (schema instanceof z.ZodArray) return `${zodTypeToString(schema.element)}[]`;
-    if (schema instanceof z.ZodOptional) return `${zodTypeToString(schema.unwrap())} | undefined`;
-    if (schema instanceof z.ZodUnion) return schema._def.options.map(zodTypeToString).join(' | ');
-    if (schema instanceof z.ZodLiteral) return JSON.stringify(schema._def.value);
-    if (schema instanceof z.ZodEnum) return schema._def.values.map((v: string) => JSON.stringify(v)).join(' | ');
+    
+    if (schema.type === 'array' && schema.items) {
+      return `${jsonSchemaToTypeString(schema.items)}[]`;
+    }
+    
+    if (schema.type === 'string') {
+      if (schema.enum) {
+        return schema.enum.map((v: string) => JSON.stringify(v)).join(' | ');
+      }
+      return 'string';
+    }
+    
+    if (schema.type === 'number' || schema.type === 'integer') return 'number';
+    if (schema.type === 'boolean') return 'boolean';
+    if (schema.type === 'null') return 'null';
+    
+    if (schema.anyOf) {
+      // Filter out null types for cleaner display
+      const types = schema.anyOf.filter((s: any) => s.type !== 'null');
+      if (types.length === 1) {
+        return jsonSchemaToTypeString(types[0]);
+      }
+      return schema.anyOf.map(jsonSchemaToTypeString).join(' | ');
+    }
+    
+    if (schema.oneOf) {
+      return schema.oneOf.map(jsonSchemaToTypeString).join(' | ');
+    }
+    
+    // Handle array of types (e.g., ["string", "null"])
+    if (Array.isArray(schema.type)) {
+      const types = schema.type.filter((t: string) => t !== 'null');
+      if (types.length === 1) return types[0];
+      return types.join(' | ');
+    }
+    
     return 'unknown';
-  }
-
-  function jsonSchemaToString(js: any): string {
-    if (!js) return 'unknown';
-    if (js.type === 'object' && js.properties) {
-      const entries = Object.entries(js.properties).map(([k, v]: [string, any]) => `${k}: ${jsonSchemaToString(v)}`);
-      return `{ ${entries.join(', ')} }`;
-    }
-    if (js.type === 'array') {
-      const t = jsonSchemaToString(js.items);
-      return `${t}[]`;
-    }
-    if (Array.isArray(js.enum)) {
-      return js.enum.map((v: any) => JSON.stringify(v)).join(' | ');
-    }
-    if (typeof js === 'string') return js;
-    return js.type || 'unknown';
   }
 
   function getParamEntries(tool: ToolDefinition): { name: string; type: string; optional?: boolean }[] {
     const schema = tool.parameters || tool.inputSchema;
     if (!schema) return [];
+    
     try {
-      // Zod object
-      if (schema instanceof z.ZodObject) {
-        const shape = schema.shape;
-        return Object.entries(shape).map(([key, val]: [string, any]) => {
-          let optional = false;
-          let inner = val;
-          if (val instanceof z.ZodOptional) {
-            optional = true;
-            inner = val.unwrap();
-          }
-          return { name: key, type: zodTypeToString(inner), optional };
-        });
+      // Convert Zod schema to JSON Schema using Zod v4's built-in method
+      let jsonSchema: any;
+      if (typeof schema === 'object' && 'type' in schema && typeof schema.type === 'string') {
+        // Already a JSON schema
+        jsonSchema = schema;
+      } else {
+        // Convert Zod to JSON Schema using built-in toJSONSchema (Zod v4+)
+        jsonSchema = (z as any).toJSONSchema(schema);
       }
-      // JSON schema object
-      if (schema && schema.type === 'object' && schema.properties) {
-        const required: string[] = Array.isArray(schema.required) ? schema.required : [];
-        return Object.entries(schema.properties).map(([key, prop]: [string, any]) => {
-          const type = jsonSchemaToString(prop);
+      
+      // Extract parameters from Zod v4 toJSONSchema format (has 'def.shape')
+      if (jsonSchema.type === 'object' && jsonSchema.def && jsonSchema.def.shape) {
+        const shape = jsonSchema.def.shape;
+        const required: string[] = Array.isArray(jsonSchema.def.required) ? jsonSchema.def.required : [];
+        return Object.entries(shape).map(([key, prop]: [string, any]) => {
+          const type = jsonSchemaToTypeString(prop);
           const optional = !required.includes(key);
           return { name: key, type, optional };
         });
       }
+      
+      // Extract parameters from standard JSON Schema format (has 'properties')
+      if (jsonSchema.type === 'object' && jsonSchema.properties) {
+        const required: string[] = Array.isArray(jsonSchema.required) ? jsonSchema.required : [];
+        return Object.entries(jsonSchema.properties).map(([key, prop]: [string, any]) => {
+          const type = jsonSchemaToTypeString(prop);
+          const optional = !required.includes(key);
+          return { name: key, type, optional };
+        });
+      }
+      
       return [];
-    } catch {
+    } catch (err) {
+      console.error('[getParamEntries] Error processing schema:', err);
       return [];
     }
   }
@@ -214,6 +337,7 @@ function generateCodeSystemPrompt(tools: Tools): string {
   function getReturnSignature(tool: ToolDefinition): string {
     const schema = tool.outputSchema;
     if (!schema) return '';
+    
     try {
       const formatType = (s: string) => {
         let out = s;
@@ -224,11 +348,18 @@ function generateCodeSystemPrompt(tools: Tools): string {
         }
         return out;
       };
-      if (schema && typeof schema === 'object' && '_def' in schema) {
-        const typeStr = zodTypeToString(schema);
-        return `: ${formatType(typeStr)}`;
+      
+      // Convert Zod schema to JSON Schema using Zod v4's built-in method
+      let jsonSchema: any;
+      if (typeof schema === 'object' && 'type' in schema && typeof schema.type === 'string') {
+        // Already a JSON schema
+        jsonSchema = schema;
+      } else {
+        // Convert Zod to JSON Schema using built-in toJSONSchema (Zod v4+)
+        jsonSchema = (z as any).toJSONSchema(schema);
       }
-      const typeStr = jsonSchemaToString(schema);
+      
+      const typeStr = jsonSchemaToTypeString(jsonSchema);
       return typeStr ? `: ${formatType(typeStr)}` : '';
     } catch {
       return '';
@@ -240,9 +371,10 @@ function generateCodeSystemPrompt(tools: Tools): string {
       const params = getParamEntries(tool);
       const returns = getReturnSignature(tool);
       const lines: string[] = [];
-      lines.push(`\n## ${name} -- ${tool.description}`);
+      lines.push(`\n## ${name}( params )`);
+      lines.push(`  - ${tool.description}`);
       if (params.length > 0) {
-        lines.push(`  - params:`);
+        lines.push(`  - params <object>:`);
         for (const p of params) {
           const t = (p.type || '').trim();
           const typeDisplay = t.startsWith('{') ? t : `<${t}>`;
@@ -257,17 +389,38 @@ function generateCodeSystemPrompt(tools: Tools): string {
     .join('\n');
 
   const prompt = `
+
 <Tool Calling SDK>
-You can take action by writing JavaScript using the following SDK.
+You can take action by writing server-side JavaScript using the following SDK. 
+
+## Runtime Environment
+
+- NodeJS V8 isolate secure sandboxed environment
+- \`document\` and \`window\` are undefined. 
+- This is not a browser environment, so DOM APIs are NOT available
+- The context is async, so you can use \`await\` directly
+
+## Available Functions
+
+- The following functions are **directly available in scope** - no imports or destructuring needed:
+- These functions have bindings to the chrome extension environment
 
 # SDK
 ${toolDescriptions}
+
+## Usage Notes
+
+- **Functions are in scope**: Call them directly (e.g. \`await click(...)\`). Do NOT destructure from \`globalThis\` or \`global\`.
+- **Already async**: Your script runs in an async context. Use \`await\` directly. Do NOT wrap in \`(async () => { ... })()\`.
+- **Return values**: Use \`return\` to return data from your script.
+- **Don't use try/catch**: We want original errors to be thrown. Use \`.catch()\` to handle errors only if errors are expected and you want to handle them gracefully.
 
 # Example
 
 \`\`\`yaml
 toolName: runToolScript
 args:
+  description: Getting user location and fetching weather...
   script: const location = await getUserLocation();\\nconst weather = await getWeather({ location });\\nreturn { location, weather };
 \`\`\`
 </Tool Calling SDK>
@@ -278,7 +431,7 @@ args:
 
 export function toolScripting(aiFunction: Function, options: CodeModeOptions = {}) {
   return async function(config: any) {
-    const { tools, system = '', ...restConfig } = config;
+    const { tools, system = '', scriptMetadataCallback, scriptResultCallback, logEnhancedSystemPrompt = false, ...restConfig } = config;
     const toolsObj: Tools = tools || {} as Tools;
 
     // Extract tool bindings
@@ -294,15 +447,36 @@ export function toolScripting(aiFunction: Function, options: CodeModeOptions = {
       ? (system ? `${system}\n\n${codeSystemPrompt}` : codeSystemPrompt)
       : system;
 
-    if (enhancedSystem) console.log(enhancedSystem);
-    
+    if (logEnhancedSystemPrompt) {
+      console.log('[toolScripting] Enhanced System Prompt:\n', enhancedSystem);
+    }
+
     // Provide exactly one tool to the SDK: runToolScript
     const singleTool = {
       runToolScript: {
         description: 'Execute the provided tool script with available functions',
-        inputSchema: z.object({ script: z.string() }),
-        execute: async ({ script }: { script: string }) => {
-          return await sandbox.execute(script, bindings);
+        inputSchema: z.object({ 
+          description: z.string().describe('Brief human-friendly description of what this script does'),
+          script: z.string().describe('The JavaScript code to execute')
+        }),
+        execute: async ({ description, script }: { description: string; script: string }) => {
+          // Notify about script execution start with description
+          if (scriptMetadataCallback) {
+            scriptMetadataCallback({ description, script });
+          }
+          
+          const result = await sandbox.execute(script, bindings);
+          
+          // Debug logging
+          console.log('[toolScripting] Script execution complete, result type:', typeof result, result === undefined ? 'UNDEFINED!' : result === null ? 'NULL!' : `length: ${(result as any)?.length || 'N/A'}`);
+          
+          // Notify about script execution result
+          if (scriptResultCallback) {
+            scriptResultCallback(result);
+          }
+          
+          // Return just the execution result (description already streamed to client)
+          return result;
         }
       }
     } as Tools;
@@ -311,7 +485,6 @@ export function toolScripting(aiFunction: Function, options: CodeModeOptions = {
     return aiFunction({
       ...restConfig,
       tools: singleTool,
-      toolChoice: 'auto',
       system: enhancedSystem,
     });
   };

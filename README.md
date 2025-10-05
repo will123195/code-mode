@@ -10,8 +10,10 @@ Plug-n-play "code mode" tool call scripting for Vercel AI SDK
 ## Installation
 
 ```bash
-npm install ai tool-scripting
+npm install tool-scripting ai@5 zod@4
 ```
+
+**Note:** Requires Zod v4
 
 ## Usage
 
@@ -43,11 +45,11 @@ const tools = {
   }),
 };
 
-// Just wrap your existing generateText (or streamText)
-const betterGenerateText = toolScripting(generateText)
+// Just wrap your existing streamText (or generateText)
+const betterGenerateText = toolScripting(streamText)
 
 // Same familiar AI SDK usage
-const result = await betterGenerateText({
+const result = await betterStreamText({
   model: openai('gpt-5'),
   tools,
   messages: [
@@ -135,7 +137,8 @@ text: The weather in San Francisco, CA today is foggy with a temperature of 65°
 ## Requirements
 
 - Node.js 18+
-- Vercel AI SDK (`ai` package)
+- Vercel AI SDK (`ai` package) v5+
+- Zod v4+ (for built-in JSON Schema conversion)
 - Tools using `tool()` helper with `execute` functions
 
 Works with both TypeScript and JavaScript.

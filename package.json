@@ -26,13 +26,15 @@
     "isolated-vm": "^5.0.1"
   },
   "peerDependencies": {
-    "ai": "^5.0.56"
+    "ai": "^5.0.56",
+    "zod": "^4.0.0"
   },
   "devDependencies": {
     "@ai-sdk/openai": "^2.0.38",
     "@types/node": "^18.0.0",
     "dotenv": "^17.2.2",
-    "typescript": "^5.0.0"
+    "typescript": "^5.0.0",
+    "zod": "^4.1.11"
   },
   "engines": {
     "node": ">=18.0.0"
