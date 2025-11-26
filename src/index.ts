@@ -196,13 +196,25 @@ class CodeExecutionSandbox {
   }
 }
 
+/**
+ * Sanitize tool name to be a valid JavaScript identifier
+ * Converts kebab-case and other non-JS-friendly characters to underscores
+ * This is needed for MCP tools which often use kebab-case naming
+ */
+function sanitizeToolName(name: string): string {
+  // Replace any character that's not alphanumeric, underscore, or dollar sign with underscore
+  return name.replace(/[^a-zA-Z0-9_$]/g, '_');
+}
+
 function extractToolBindings(tools: Tools): Record<string, Function> {
   const bindings: Record<string, Function> = {};
-  
+
   for (const [name, tool] of Object.entries(tools)) {
-    bindings[name] = tool.execute;
+    // Sanitize tool name to ensure it's a valid JavaScript identifier
+    const sanitizedName = sanitizeToolName(name);
+    bindings[sanitizedName] = tool.execute;
   }
-  
+
   return bindings;
 }
 
@@ -368,10 +380,12 @@ function generateCodeSystemPrompt(tools: Tools): string {
 
   const toolDescriptions = Object.entries(tools)
     .map(([name, tool]) => {
+      // Use sanitized name in documentation to match what's available in the sandbox
+      const sanitizedName = sanitizeToolName(name);
       const params = getParamEntries(tool);
       const returns = getReturnSignature(tool);
       const lines: string[] = [];
-      lines.push(`\n## ${name}( params )`);
+      lines.push(`\n## ${sanitizedName}( params )`);
       lines.push(`  - ${tool.description}`);
       if (params.length > 0) {
         lines.push(`  - params <object>:`);
